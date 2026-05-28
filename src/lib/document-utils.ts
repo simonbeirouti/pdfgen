@@ -65,21 +65,6 @@ export function createSavePatch({
   };
 }
 
-export function hasDocumentChanged(document: DocumentRow, patch: SavePatch) {
-  return hasSavePatchChanged(createSavePatchFromDocument(document), patch);
-}
-
-export function createSavePatchFromDocument(document: DocumentRow): SavePatch {
-  return createSavePatch({
-    title: document.title,
-    contentText: getEditableContentText(document),
-    pagePreset: document.page_preset,
-    customWidth: document.custom_width ?? 595,
-    customHeight: document.custom_height ?? 842,
-    theme: normalizeDocumentTheme(document.theme),
-  });
-}
-
 export function hasSavePatchChanged(current: SavePatch, next: SavePatch) {
   return (
     current.title !== next.title ||

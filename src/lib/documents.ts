@@ -39,7 +39,6 @@ export const DOCUMENT_THEME_ACCENT_COLORS = [
 export const DOCUMENT_THEME_MARGIN_MIN = 24;
 export const DOCUMENT_THEME_MARGIN_MAX = 72;
 export const DOCUMENT_THEME_MARGIN_STEP = 2;
-export type DocumentThemeMargin = number;
 
 export const DOCUMENT_THEME_IMAGE_SIZE_OPTIONS = [
   { value: "small", label: "Small" },
@@ -55,16 +54,28 @@ export type DocumentTheme = {
   fontFamily: DocumentThemeFont;
   accentColor: string;
   fontScale: number;
-  margin: DocumentThemeMargin;
+  margin: number;
   imageSize: DocumentThemeImageSize;
   text: {
-    h1: TextThemeStyle;
-    p: TextThemeStyle;
-    li: TextThemeStyle;
+    h1: {
+      fontSize: number;
+      lineHeight: number;
+      spacingAfter: number;
+    };
+    p: {
+      fontSize: number;
+      lineHeight: number;
+      spacingAfter: number;
+    };
+    li: {
+      fontSize: number;
+      lineHeight: number;
+      spacingAfter: number;
+    };
   };
 };
 
-export type TextThemeStyle = {
+type TextThemeStyle = {
   fontSize: number;
   lineHeight: number;
   spacingAfter: number;
@@ -164,8 +175,6 @@ export type DocumentRow = {
   updated_at: string;
 };
 
-export type DocumentVersionSource = "generation" | "pre_restore";
-
 export type DocumentVersionRow = {
   id: string;
   document_id: string;
@@ -177,7 +186,7 @@ export type DocumentVersionRow = {
   custom_width: number | null;
   custom_height: number | null;
   theme: DocumentTheme;
-  source: DocumentVersionSource;
+  source: "generation" | "pre_restore";
   version_updated_at: string;
   created_at: string;
 };
@@ -243,13 +252,6 @@ export type AssetRow = {
   extracted_text: string | null;
   created_at: string;
   updated_at: string;
-};
-
-export type DocumentAssetRow = {
-  document_id: string;
-  asset_id: string;
-  user_id: string;
-  created_at: string;
 };
 
 export type DocumentMessageRow = {
@@ -324,7 +326,7 @@ function isAccentColor(value: unknown): value is string {
   );
 }
 
-function normalizeThemeMargin(value: unknown, fallback: DocumentThemeMargin) {
+function normalizeThemeMargin(value: unknown, fallback: number) {
   return normalizeNumber(
     value,
     fallback,

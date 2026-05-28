@@ -127,6 +127,8 @@ pnpm dev       # Start the Vite development server
 pnpm build     # Type-check and build for production
 pnpm lint      # Run ESLint
 pnpm preview   # Preview the production build locally
+pnpm supabase:start  # Start local Supabase
+pnpm supabase:reset  # Reset the local Supabase database
 ```
 
 ## Notes

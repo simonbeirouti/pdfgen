@@ -1,5 +1,4 @@
-import "@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.106.2";
+import { createClient } from "npm:@supabase/supabase-js";
 
 type FormatRequest = {
   documentId?: string;
@@ -200,6 +199,66 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const DOCUMENT_STRUCTURE_PROMPT = [
+  "You create polished PDF-ready document content from chat instructions and linked asset context.",
+  "Return JSON only.",
+  "Use assistant_message for a short conversational status update about what changed, never the full document body.",
+  "Structure the document semantically so styling can be applied by block type.",
+  "For resumes, set title to the person's name, contact to one compact contact line, summary to one professional summary paragraph, and blocks to sections such as Professional Experience, Additional Experience, Education, and Core Skills.",
+  "In each section, use children with semantic types.",
+  "Experience items use type experience_item with role, company, location, dates, and bullets.",
+  "Education items use type education_item with institution, qualification, and dates.",
+  "Skills use type skills with items and display inline.",
+  "Use empty strings or empty arrays for fields that do not apply.",
+  "Preserve markdown links inside text fields as [label](url).",
+  "Preserve facts and integrate relevant asset context naturally.",
+].join(" ");
+
+const HUMANIZED_WRITING_PROMPT = [
+  "Humanized writing rules for generated PDF content fields:",
+  "Write like a careful human editor, not a chatbot or press release.",
+  "Prefer specific facts, concrete actions, and simple constructions such as is, are, has, and can.",
+  "Keep the user's intended voice, but avoid sterile neutrality when a warmer or more direct voice fits the document.",
+  "Use varied sentence rhythm. Do not force every idea into the same length, a three-part list, or a tidy formula.",
+  "Do not inflate significance with phrases such as stands as, serves as, testament, pivotal, crucial, key role, underscores, broader landscape, indelible mark, or enduring legacy.",
+  "Avoid promotional language such as boasts, vibrant, rich cultural heritage, profound, groundbreaking, renowned, breathtaking, must-visit, or stunning unless it is a quoted claim from the source.",
+  "Avoid vague attribution such as experts argue, industry reports, observers have cited, several sources, or based on available information. Use a specific source from the provided context or omit the claim.",
+  "Avoid superficial -ing clauses that add fake depth, such as highlighting, underscoring, reflecting, showcasing, cultivating, fostering, or contributing to.",
+  "Avoid negative parallelisms such as not only...but also and it is not just...it is.",
+  "Avoid false ranges such as from X to Y when the items are not on a real scale.",
+  "Do not add generic challenges, future outlook, legacy, or upbeat conclusion sections unless the user explicitly asks for them.",
+  "Do not use em dashes, emojis, markdown boldface, curly quotation marks, chatbot filler, knowledge-cutoff disclaimers, or sycophantic praise.",
+  "Use sentence case for generic headings, while preserving names, official titles, acronyms, and conventional resume labels.",
+  "If a detail is missing, do not pad around it. Leave it out or write the most honest concise version.",
+  "These rules apply to the document text, headings, bullets, and structured content fields. The assistant_message may stay as a short, natural status update.",
+].join(" ");
+
+const SYSTEM_PROMPT = `${DOCUMENT_STRUCTURE_PROMPT}\n\n${HUMANIZED_WRITING_PROMPT}`;
+
+const GENERATED_TEXT_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/^(?:Of course|Certainly|Sure|Great question)[!,.]\s*/i, ""],
+  [/[“”]/g, '"'],
+  [/[‘’]/g, "'"],
+  [/—/g, ", "],
+  [/–/g, "-"],
+  [/\*\*([^*]+)\*\*/g, "$1"],
+  [/__([^_]+)__/g, "$1"],
+  [/\bin order to\b/gi, "to"],
+  [/\bdue to the fact that\b/gi, "because"],
+  [/\bat this point in time\b/gi, "now"],
+  [/\bin the event that\b/gi, "if"],
+  [/\bhas the ability to\b/gi, "can"],
+  [/\bit is important to note that\s*/gi, ""],
+  [/\b(?:serves as|stands as|is) a testament to\b/gi, "shows"],
+  [/\bserves as\b/gi, "is"],
+  [/\bstands as\b/gi, "is"],
+  [/\bboasts\b/gi, "has"],
+  [/\bAdditionally,\s*/gi, ""],
+  [/\bMoreover,\s*/gi, ""],
+  [/\bI hope this helps!?$/gi, ""],
+  [/\bLet me know if[^.?!]*[.?!]?$/gi, ""],
+];
 
 Deno.serve(async (req) => {
   try {
@@ -473,11 +532,17 @@ function normalizeDocumentContentBlocks(value: unknown): DocumentContentBlock[] 
     blocks?: unknown;
   };
   const blocks: DocumentContentBlock[] = [];
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
+  const title = typeof payload.title === "string"
+    ? humanizeGeneratedText(payload.title)
+    : "";
   const contact =
-    typeof payload.contact === "string" ? payload.contact.trim() : "";
+    typeof payload.contact === "string"
+      ? humanizeGeneratedText(payload.contact)
+      : "";
   const summary =
-    typeof payload.summary === "string" ? payload.summary.trim() : "";
+    typeof payload.summary === "string"
+      ? humanizeGeneratedText(payload.summary)
+      : "";
 
   if (title) {
     blocks.push({ type: "document_title", text: title });
@@ -508,7 +573,9 @@ function normalizeSections(value: unknown[]): DocumentContentBlock[] {
       title?: unknown;
       children?: unknown;
     };
-    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const title = typeof record.title === "string"
+      ? humanizeGeneratedText(record.title)
+      : "";
     const children = Array.isArray(record.children)
       ? normalizeSemanticBlocks(record.children)
       : [];
@@ -530,13 +597,17 @@ function normalizeSemanticBlocks(value: unknown[]): DocumentContentBlock[] {
       record.type === "contact" ||
       record.type === "summary"
     ) {
-      const text = typeof record.text === "string" ? record.text.trim() : "";
+      const text = typeof record.text === "string"
+        ? humanizeGeneratedText(record.text)
+        : "";
 
       return text ? [{ type: record.type, text }] : [];
     }
 
     if (record.type === "experience_item") {
-      const role = typeof record.role === "string" ? record.role.trim() : "";
+      const role = typeof record.role === "string"
+        ? humanizeGeneratedText(record.role)
+        : "";
 
       return role
         ? [
@@ -545,14 +616,16 @@ function normalizeSemanticBlocks(value: unknown[]): DocumentContentBlock[] {
               role,
               company:
                 typeof record.company === "string"
-                  ? record.company.trim()
+                  ? humanizeGeneratedText(record.company)
                   : "",
               location:
                 typeof record.location === "string"
-                  ? record.location.trim()
+                  ? humanizeGeneratedText(record.location)
                   : "",
               dates:
-                typeof record.dates === "string" ? record.dates.trim() : "",
+                typeof record.dates === "string"
+                  ? humanizeGeneratedText(record.dates)
+                  : "",
               bullets: normalizeStringArray(record.bullets),
             },
           ]
@@ -562,7 +635,7 @@ function normalizeSemanticBlocks(value: unknown[]): DocumentContentBlock[] {
     if (record.type === "education_item") {
       const institution =
         typeof record.institution === "string"
-          ? record.institution.trim()
+          ? humanizeGeneratedText(record.institution)
           : "";
 
       return institution
@@ -572,10 +645,12 @@ function normalizeSemanticBlocks(value: unknown[]): DocumentContentBlock[] {
               institution,
               qualification:
                 typeof record.qualification === "string"
-                  ? record.qualification.trim()
+                  ? humanizeGeneratedText(record.qualification)
                   : "",
               dates:
-                typeof record.dates === "string" ? record.dates.trim() : "",
+                typeof record.dates === "string"
+                  ? humanizeGeneratedText(record.dates)
+                  : "",
             },
           ]
         : [];
@@ -603,9 +678,26 @@ function normalizeStringArray(value: unknown) {
   return Array.isArray(value)
     ? value
         .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
+        .map((item) => humanizeGeneratedText(item))
         .filter(Boolean)
     : [];
+}
+
+function humanizeGeneratedText(text: string) {
+  let value = text.trim();
+
+  for (const [pattern, replacement] of GENERATED_TEXT_REPLACEMENTS) {
+    value = value.replace(pattern, replacement);
+  }
+
+  return value
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/,\s*,+/g, ", ")
+    .replace(/\s+([)\]])/g, "$1")
+    .replace(/([([{])\s+/g, "$1")
+    .trim();
 }
 
 function blockText(block: DocumentContentBlock): string {
@@ -709,8 +801,7 @@ async function formatWithOpenAI({
         input: [
           {
             role: "system",
-            content:
-              "You create polished PDF-ready document content from chat instructions and linked asset context. Return JSON only. Use assistant_message for a short conversational status update about what changed, never the full document body. Structure the document semantically so styling can be applied by block type. For resumes, set title to the person's name, contact to one compact contact line, summary to one professional summary paragraph, and blocks to sections such as Professional Experience, Additional Experience, Education, and Core Skills. In each section, use children with semantic types. Experience items use type experience_item with role, company, location, dates, and bullets. Education items use type education_item with institution, qualification, and dates. Skills use type skills with items and display inline. Use empty strings or empty arrays for fields that do not apply. Preserve markdown links inside text fields as [label](url). Preserve facts and integrate relevant asset context naturally.",
+            content: SYSTEM_PROMPT,
           },
           {
             role: "user",

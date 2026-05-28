@@ -34,7 +34,7 @@ export type PdfPreviewDocument = {
   theme: DocumentTheme;
 };
 
-export type DocumentsRouteContextValue = {
+type DocumentsRouteContextValue = {
   session: Session;
   selectedDocumentId: string | null;
   selectedDocument: DocumentRow | null;
