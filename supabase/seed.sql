@@ -1,0 +1,1 @@
+-- Intentionally empty. The app stores user-owned documents through Supabase Auth.
