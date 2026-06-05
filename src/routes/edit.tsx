@@ -49,7 +49,11 @@ import {
 } from "@/components/ui/sheet";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
-import { formatFileSize, slugify } from "@/lib/document-utils";
+import {
+  createEditableDocumentJson,
+  formatFileSize,
+  slugify,
+} from "@/lib/document-utils";
 import {
   DEFAULT_DOCUMENT_THEME,
   DOCUMENT_THEME_ACCENT_COLORS,
@@ -91,7 +95,7 @@ export function EditDocumentRoute() {
     isRestoringVersion,
     pdfDocument,
     pdfPreviewDocument,
-    contentText,
+    contentBlocks,
     model,
     setModel,
     pagePreset,
@@ -111,7 +115,7 @@ export function EditDocumentRoute() {
     goToDocuments,
     signOut,
     updateDraft,
-    saveContentText,
+    saveDocumentJson,
     handleAssetFiles,
     toggleAssetLink,
     generateDocument,
@@ -121,15 +125,28 @@ export function EditDocumentRoute() {
   const [isThemeSheetOpen, setIsThemeSheetOpen] = useState(false);
   const [isVersionSheetOpen, setIsVersionSheetOpen] = useState(false);
   const [isEditingContent, setIsEditingContent] = useState(false);
-  const [contentEditorValue, setContentEditorValue] = useState(contentText);
+  const editableDocumentJson = useMemo(
+    () =>
+      createEditableDocumentJson({
+        title,
+        contentBlocks,
+        pagePreset,
+        customWidth,
+        customHeight,
+        theme,
+      }),
+    [contentBlocks, customHeight, customWidth, pagePreset, theme, title],
+  );
+  const [contentEditorValue, setContentEditorValue] =
+    useState(editableDocumentJson);
 
   function startEditingContent() {
-    setContentEditorValue(contentText);
+    setContentEditorValue(editableDocumentJson);
     setIsEditingContent(true);
   }
 
   async function saveAndPreviewContent() {
-    const didSave = await saveContentText(contentEditorValue);
+    const didSave = await saveDocumentJson(contentEditorValue);
 
     if (didSave) {
       setIsEditingContent(false);
@@ -397,11 +414,11 @@ export function EditDocumentRoute() {
           <div className="mb-3 flex shrink-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
             <div>
               <h2 className="text-sm font-medium">
-                {isEditingContent ? "Edit Content" : "PDF Preview"}
+                {isEditingContent ? "Edit JSON" : "PDF Preview"}
               </h2>
               <p className="text-xs text-muted-foreground">
                 {isEditingContent
-                  ? "Save to return to the PDF preview."
+                  ? "Edit content blocks and theme, then save to preview."
                   : pdfPreviewDocument
                     ? getPageSize(pdfPreviewDocument).label
                     : ""}
@@ -509,7 +526,7 @@ export function EditDocumentRoute() {
                 id="document-content"
                 value={contentEditorValue}
                 onChange={(event) => setContentEditorValue(event.target.value)}
-                placeholder="Generated PDF content"
+                placeholder="Generated PDF JSON"
                 className="h-full min-h-0 resize-none rounded-none border-0 bg-background p-4 font-mono text-sm leading-relaxed shadow-none focus-visible:ring-0"
               />
             </div>

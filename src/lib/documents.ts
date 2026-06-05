@@ -239,6 +239,9 @@ export type DocumentContentBlock =
   | {
       type: "ul";
       items: string[];
+    }
+  | {
+      type: "slide_break";
     };
 
 export type AssetRow = {
@@ -519,6 +522,10 @@ export function normalizeDocumentContentBlocks(
         : [];
     }
 
+    if (block.type === "slide_break") {
+      return [{ type: "slide_break" }];
+    }
+
     if (block.type === "ul" && Array.isArray(block.items)) {
       const items = block.items
         .filter((item): item is string => typeof item === "string")
@@ -596,6 +603,14 @@ export function contentBlocksToText(blocks: DocumentContentBlock[]): string {
         return block.items.map((item) => `- ${item}`).join("\n");
       }
 
+      if (block.type === "slide_break") {
+        return "---";
+      }
+
+      if (block.type === "h1") {
+        return `# ${block.text}`;
+      }
+
       return block.text;
     })
     .filter(Boolean)
@@ -617,6 +632,7 @@ const RESUME_SECTION_HEADINGS = new Set([
 const DATE_RANGE_PATTERN =
   /^(?:[A-Z][a-z]+\.?\s+)?\d{4}\s*[-–—]\s*(?:(?:[A-Z][a-z]+\.?\s+)?\d{4}|present|current)$/i;
 const BULLET_PATTERN = /^[-*•]\s+/;
+const SLIDE_BREAK_PATTERN = /^-{3,}$/;
 const EDUCATION_QUALIFICATION_PATTERN =
   /\b(?:bachelor|master|doctor|phd|diploma|certificate|certification|degree|major|minor|honours|graduate|undergraduate|vce|hsc|ged|mba|bsc|msc)\b/i;
 
@@ -652,6 +668,10 @@ function stripBulletMarker(value: string) {
 
 function stripHeadingMarker(value: string) {
   return value.replace(/^#{1,6}\s+/, "").trim();
+}
+
+function isSlideBreakLine(value: string) {
+  return SLIDE_BREAK_PATTERN.test(value.trim());
 }
 
 function isDateRange(value: string) {
@@ -731,7 +751,12 @@ function findNextSectionIndex(lines: string[], startIndex: number) {
       return false;
     }
 
-    return line.startsWith("## ") || isResumeSectionHeading(line);
+    return (
+      line.startsWith("# ") ||
+      line.startsWith("## ") ||
+      isSlideBreakLine(line) ||
+      isResumeSectionHeading(line)
+    );
   });
 
   return nextIndex === -1 ? lines.length : nextIndex;
@@ -926,15 +951,26 @@ function parseSectionChildren(
     }
   }
 
+  let listItems: string[] = [];
+
+  function flushList() {
+    if (listItems.length) {
+      blocks.push({ type: "ul", items: listItems });
+      listItems = [];
+    }
+  }
+
   for (const line of lines) {
     if (BULLET_PATTERN.test(line)) {
       flushParagraph();
-      blocks.push({ type: "ul", items: [stripBulletMarker(line)] });
+      listItems.push(stripBulletMarker(line));
     } else {
+      flushList();
       paragraphLines.push(line);
     }
   }
 
+  flushList();
   flushParagraph();
 
   return blocks;
@@ -968,7 +1004,9 @@ export function editableTextToContentBlocks(
   const introLines: string[] = [];
   while (
     index < lines.length &&
+    !lines[index]?.startsWith("# ") &&
     !lines[index]?.startsWith("## ") &&
+    !isSlideBreakLine(lines[index] ?? "") &&
     !isResumeSectionHeading(lines[index] ?? "")
   ) {
     introLines.push(lines[index] ?? "");
@@ -985,6 +1023,19 @@ export function editableTextToContentBlocks(
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
+
+    if (isSlideBreakLine(line)) {
+      blocks.push({ type: "slide_break" });
+      index += 1;
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      blocks.push({ type: "h1", text: stripHeadingMarker(line) });
+      index += 1;
+      continue;
+    }
+
     const title = line.startsWith("## ") ? stripHeadingMarker(line) : line;
     const endIndex = findNextSectionIndex(lines, index);
     const children = parseSectionChildren(title, lines.slice(index + 1, endIndex));

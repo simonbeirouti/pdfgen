@@ -28,8 +28,28 @@ type DocumentRow = {
   page_preset: string;
   custom_width: number | null;
   custom_height: number | null;
-  theme: Record<string, unknown>;
+  theme: DocumentTheme;
   updated_at: string;
+};
+
+type DocumentTheme = {
+  preset: "classic" | "modern" | "compact" | "presentation";
+  fontFamily: "Helvetica" | "Times-Roman" | "Courier";
+  accentColor: string;
+  fontScale: number;
+  margin: number;
+  imageSize: "small" | "medium" | "large";
+  text: {
+    h1: TextThemeStyle;
+    p: TextThemeStyle;
+    li: TextThemeStyle;
+  };
+};
+
+type TextThemeStyle = {
+  fontSize: number;
+  lineHeight: number;
+  spacingAfter: number;
 };
 
 type DocumentContentBlock =
@@ -72,20 +92,83 @@ type DocumentContentBlock =
   | {
       type: "h1";
       text: string;
-      items: [];
     }
   | {
       type: "p";
       text: string;
-      items: [];
     }
   | {
       type: "ul";
-      text: "";
       items: string[];
+    }
+  | {
+      type: "slide_break";
     };
 
 const DEFAULT_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5"];
+const DEFAULT_DOCUMENT_THEME: DocumentTheme = {
+  preset: "classic",
+  fontFamily: "Helvetica",
+  accentColor: "#2563eb",
+  fontScale: 1,
+  margin: 42,
+  imageSize: "medium",
+  text: {
+    h1: { fontSize: 22, lineHeight: 1.2, spacingAfter: 12 },
+    p: { fontSize: 11, lineHeight: 1.55, spacingAfter: 8 },
+    li: { fontSize: 11, lineHeight: 1.45, spacingAfter: 4 },
+  },
+};
+const DOCUMENT_THEME_PRESETS = {
+  classic: DEFAULT_DOCUMENT_THEME,
+  modern: {
+    preset: "modern",
+    fontFamily: "Helvetica",
+    accentColor: "#16a34a",
+    fontScale: 1,
+    margin: 42,
+    imageSize: "medium",
+    text: {
+      h1: { fontSize: 24, lineHeight: 1.15, spacingAfter: 14 },
+      p: { fontSize: 11.5, lineHeight: 1.6, spacingAfter: 9 },
+      li: { fontSize: 11.5, lineHeight: 1.45, spacingAfter: 5 },
+    },
+  },
+  compact: {
+    preset: "compact",
+    fontFamily: "Helvetica",
+    accentColor: "#0f172a",
+    fontScale: 0.9,
+    margin: 28,
+    imageSize: "small",
+    text: {
+      h1: { fontSize: 18, lineHeight: 1.15, spacingAfter: 8 },
+      p: { fontSize: 10, lineHeight: 1.35, spacingAfter: 5 },
+      li: { fontSize: 10, lineHeight: 1.3, spacingAfter: 3 },
+    },
+  },
+  presentation: {
+    preset: "presentation",
+    fontFamily: "Helvetica",
+    accentColor: "#9333ea",
+    fontScale: 1.2,
+    margin: 56,
+    imageSize: "large",
+    text: {
+      h1: { fontSize: 30, lineHeight: 1.1, spacingAfter: 16 },
+      p: { fontSize: 15, lineHeight: 1.35, spacingAfter: 10 },
+      li: { fontSize: 15, lineHeight: 1.3, spacingAfter: 6 },
+    },
+  },
+} satisfies Record<DocumentTheme["preset"], DocumentTheme>;
+const DOCUMENT_THEME_ACCENT_COLORS = [
+  "#2563eb",
+  "#16a34a",
+  "#dc2626",
+  "#9333ea",
+  "#ea580c",
+  "#0f172a",
+];
 const semanticBlockSchema = {
   type: "object",
   additionalProperties: false,
@@ -153,6 +236,59 @@ const semanticBlockSchema = {
     "display",
   ],
 } as const;
+const textThemeStyleSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    fontSize: { type: "number" },
+    lineHeight: { type: "number" },
+    spacingAfter: { type: "number" },
+  },
+  required: ["fontSize", "lineHeight", "spacingAfter"],
+} as const;
+const documentThemeSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    preset: {
+      type: "string",
+      enum: ["classic", "modern", "compact", "presentation"],
+    },
+    fontFamily: {
+      type: "string",
+      enum: ["Helvetica", "Times-Roman", "Courier"],
+    },
+    accentColor: {
+      type: "string",
+      enum: DOCUMENT_THEME_ACCENT_COLORS,
+    },
+    fontScale: { type: "number" },
+    margin: { type: "number" },
+    imageSize: {
+      type: "string",
+      enum: ["small", "medium", "large"],
+    },
+    text: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        h1: textThemeStyleSchema,
+        p: textThemeStyleSchema,
+        li: textThemeStyleSchema,
+      },
+      required: ["h1", "p", "li"],
+    },
+  },
+  required: [
+    "preset",
+    "fontFamily",
+    "accentColor",
+    "fontScale",
+    "margin",
+    "imageSize",
+    "text",
+  ],
+} as const;
 const documentBlocksSchema = {
   type: "object",
   additionalProperties: false,
@@ -169,6 +305,7 @@ const documentBlocksSchema = {
     summary: {
       type: "string",
     },
+    theme: documentThemeSchema,
     blocks: {
       type: "array",
       items: {
@@ -191,7 +328,14 @@ const documentBlocksSchema = {
       },
     },
   },
-  required: ["assistant_message", "title", "contact", "summary", "blocks"],
+  required: [
+    "assistant_message",
+    "title",
+    "contact",
+    "summary",
+    "theme",
+    "blocks",
+  ],
 } as const;
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -205,6 +349,9 @@ const DOCUMENT_STRUCTURE_PROMPT = [
   "Return JSON only.",
   "Use assistant_message for a short conversational status update about what changed, never the full document body.",
   "Structure the document semantically so styling can be applied by block type.",
+  "The user will provide the current document JSON, including theme and content_blocks. Treat that JSON as the source of truth for existing document content and styling.",
+  "Return a complete replacement document JSON using title, contact, summary, theme, and blocks. Preserve existing theme values unless the user asks for styling changes or the requested document format clearly requires a preset change.",
+  "When changing styling, only use valid theme values from the provided schema and keep text sizes, margins, and scale within professional PDF ranges.",
   "For resumes, set title to the person's name, contact to one compact contact line, summary to one professional summary paragraph, and blocks to sections such as Professional Experience, Additional Experience, Education, and Core Skills.",
   "In each section, use children with semantic types.",
   "Experience items use type experience_item with role, company, location, dates, and bullets.",
@@ -340,7 +487,7 @@ async function handleFormatRequest(req: Request) {
 
   const { data: document, error: documentError } = await supabase
     .from("documents")
-    .select("id")
+    .select("*")
     .eq("id", documentId)
     .single();
 
@@ -390,6 +537,7 @@ async function handleFormatRequest(req: Request) {
   const formattedContent = await formatWithOpenAI({
     apiKey: openaiApiKey,
     model,
+    document: document as DocumentRow,
     assets: assetsResult.value,
     messages: (messagesResult.data ?? []) as DocumentMessageRow[],
   });
@@ -401,8 +549,10 @@ async function handleFormatRequest(req: Request) {
   const { data: updatedDocument, error: updateError } = await supabase
     .from("documents")
     .update({
+      title: formattedContent.value.title,
       formatted_content: formattedContent.value.text,
       content_blocks: formattedContent.value.blocks,
+      theme: formattedContent.value.theme,
     })
     .eq("id", documentId)
     .select()
@@ -700,6 +850,199 @@ function humanizeGeneratedText(text: string) {
     .trim();
 }
 
+function normalizeStoredContentBlocks(value: unknown): DocumentContentBlock[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((block): DocumentContentBlock[] => {
+    if (!isRecord(block)) {
+      return [];
+    }
+
+    if (
+      block.type === "document_title" ||
+      block.type === "contact" ||
+      block.type === "summary" ||
+      block.type === "h1" ||
+      block.type === "p"
+    ) {
+      return typeof block.text === "string" && block.text.trim()
+        ? [{ type: block.type, text: block.text.trim() } as DocumentContentBlock]
+        : [];
+    }
+
+    if (block.type === "section") {
+      const title = typeof block.title === "string" ? block.title.trim() : "";
+      return title
+        ? [
+            {
+              type: "section",
+              title,
+              children: normalizeStoredContentBlocks(block.children),
+            },
+          ]
+        : [];
+    }
+
+    if (block.type === "experience_item") {
+      const role = typeof block.role === "string" ? block.role.trim() : "";
+
+      return role
+        ? [
+            {
+              type: "experience_item",
+              role,
+              company: typeof block.company === "string" ? block.company.trim() : "",
+              location:
+                typeof block.location === "string" ? block.location.trim() : "",
+              dates: typeof block.dates === "string" ? block.dates.trim() : "",
+              bullets: normalizePlainStringArray(block.bullets),
+            },
+          ]
+        : [];
+    }
+
+    if (block.type === "education_item") {
+      const institution =
+        typeof block.institution === "string" ? block.institution.trim() : "";
+
+      return institution
+        ? [
+            {
+              type: "education_item",
+              institution,
+              qualification:
+                typeof block.qualification === "string"
+                  ? block.qualification.trim()
+                  : "",
+              dates: typeof block.dates === "string" ? block.dates.trim() : "",
+            },
+          ]
+        : [];
+    }
+
+    if (block.type === "skills") {
+      const items = normalizePlainStringArray(block.items);
+
+      return items.length
+        ? [
+            {
+              type: "skills",
+              items,
+              display: block.display === "bullets" ? "bullets" : "inline",
+            },
+          ]
+        : [];
+    }
+
+    if (block.type === "ul") {
+      const items = normalizePlainStringArray(block.items);
+      return items.length ? [{ type: "ul", items }] : [];
+    }
+
+    if (block.type === "slide_break") {
+      return [{ type: "slide_break" }];
+    }
+
+    return [];
+  });
+}
+
+function normalizePlainStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function normalizeDocumentTheme(value: unknown): DocumentTheme {
+  if (!isRecord(value)) {
+    return DEFAULT_DOCUMENT_THEME;
+  }
+
+  const preset = isThemePreset(value.preset)
+    ? value.preset
+    : DEFAULT_DOCUMENT_THEME.preset;
+  const presetTheme = DOCUMENT_THEME_PRESETS[preset];
+  const text = isRecord(value.text) ? value.text : {};
+
+  return {
+    preset,
+    fontFamily: isThemeFont(value.fontFamily)
+      ? value.fontFamily
+      : presetTheme.fontFamily,
+    accentColor: isAccentColor(value.accentColor)
+      ? value.accentColor
+      : presetTheme.accentColor,
+    fontScale: normalizeNumber(value.fontScale, presetTheme.fontScale, 0.85, 1.25),
+    margin: normalizeNumber(value.margin, presetTheme.margin, 24, 72),
+    imageSize: isThemeImageSize(value.imageSize)
+      ? value.imageSize
+      : presetTheme.imageSize,
+    text: {
+      h1: normalizeTextThemeStyle(text.h1, presetTheme.text.h1),
+      p: normalizeTextThemeStyle(text.p, presetTheme.text.p),
+      li: normalizeTextThemeStyle(text.li, presetTheme.text.li),
+    },
+  };
+}
+
+function normalizeTextThemeStyle(
+  value: unknown,
+  fallback: TextThemeStyle,
+): TextThemeStyle {
+  if (!isRecord(value)) {
+    return fallback;
+  }
+
+  return {
+    fontSize: normalizeNumber(value.fontSize, fallback.fontSize, 6, 72),
+    lineHeight: normalizeNumber(value.lineHeight, fallback.lineHeight, 1, 2.4),
+    spacingAfter: normalizeNumber(value.spacingAfter, fallback.spacingAfter, 0, 48),
+  };
+}
+
+function normalizeNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Number(value.toFixed(2))));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isThemePreset(value: unknown): value is DocumentTheme["preset"] {
+  return (
+    value === "classic" ||
+    value === "modern" ||
+    value === "compact" ||
+    value === "presentation"
+  );
+}
+
+function isThemeFont(value: unknown): value is DocumentTheme["fontFamily"] {
+  return value === "Helvetica" || value === "Times-Roman" || value === "Courier";
+}
+
+function isAccentColor(value: unknown): value is string {
+  return typeof value === "string" && DOCUMENT_THEME_ACCENT_COLORS.includes(value);
+}
+
+function isThemeImageSize(value: unknown): value is DocumentTheme["imageSize"] {
+  return value === "small" || value === "medium" || value === "large";
+}
+
 function blockText(block: DocumentContentBlock): string {
   if (block.type === "section") {
     return [`## ${block.title}`, contentBlocksToText(block.children)]
@@ -742,6 +1085,18 @@ function blockText(block: DocumentContentBlock): string {
     return block.items.map((item) => `- ${item}`).join("\n");
   }
 
+  if (block.type === "slide_break") {
+    return "---";
+  }
+
+  if (block.type === "h1") {
+    return `# ${block.text}`;
+  }
+
+  if (block.type === "p") {
+    return block.text;
+  }
+
   return block.text;
 }
 
@@ -755,11 +1110,13 @@ function contentBlocksToText(blocks: DocumentContentBlock[]) {
 async function formatWithOpenAI({
   apiKey,
   model,
+  document,
   assets,
   messages,
 }: {
   apiKey: string;
   model: string;
+  document: DocumentRow;
   assets: AssetRow[];
   messages: DocumentMessageRow[];
 }): Promise<
@@ -767,7 +1124,9 @@ async function formatWithOpenAI({
       ok: true;
       value: {
         assistantMessage: string;
+        title: string;
         blocks: DocumentContentBlock[];
+        theme: DocumentTheme;
         text: string;
       };
     }
@@ -787,6 +1146,18 @@ async function formatWithOpenAI({
   const conversation = messages
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n\n");
+  const currentDocumentJson = JSON.stringify(
+    {
+      title: document.title,
+      page_preset: document.page_preset,
+      custom_width: document.custom_width,
+      custom_height: document.custom_height,
+      theme: normalizeDocumentTheme(document.theme),
+      content_blocks: normalizeStoredContentBlocks(document.content_blocks),
+    },
+    null,
+    2,
+  );
 
   let response: Response;
   try {
@@ -805,7 +1176,7 @@ async function formatWithOpenAI({
           },
           {
             role: "user",
-            content: `Linked assets:\n${assetContext}\n\nConversation:\n${conversation || "(none)"}`,
+            content: `Current document JSON:\n${currentDocumentJson}\n\nLinked assets:\n${assetContext}\n\nConversation:\n${conversation || "(none)"}`,
           },
         ],
         text: {
@@ -867,15 +1238,45 @@ async function formatWithOpenAI({
   if (!blocks.length) {
     return { ok: false, error: "OpenAI returned no document blocks." };
   }
+  const theme = getDocumentTheme(parsed, document.theme);
+  const title = getDocumentTitle(parsed, document.title);
 
   return {
     ok: true,
     value: {
       assistantMessage: getAssistantMessage(parsed),
+      title,
       blocks,
+      theme,
       text: contentBlocksToText(blocks),
     },
   };
+}
+
+function getDocumentTitle(payload: unknown, fallback: string) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "title" in payload &&
+    typeof payload.title === "string" &&
+    payload.title.trim()
+  ) {
+    return humanizeGeneratedText(payload.title);
+  }
+
+  return fallback.trim() || "Untitled";
+}
+
+function getDocumentTheme(payload: unknown, fallback: unknown) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "theme" in payload
+  ) {
+    return normalizeDocumentTheme(payload.theme);
+  }
+
+  return normalizeDocumentTheme(fallback);
 }
 
 function getAssistantMessage(payload: unknown) {

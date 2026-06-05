@@ -17,7 +17,7 @@ import type {
 export type DocumentDraft = {
   documentId: string;
   title: string;
-  contentText: string;
+  contentBlocks: DocumentContentBlock[];
   pagePreset: PagePreset;
   customWidth: number;
   customHeight: number;
@@ -47,7 +47,7 @@ type DocumentsRouteContextValue = {
   isLoadingVersions: boolean;
   isRestoringVersion: boolean;
   title: string;
-  contentText: string;
+  contentBlocks: DocumentContentBlock[];
   pagePreset: PagePreset;
   customWidth: number;
   customHeight: number;
@@ -69,7 +69,7 @@ type DocumentsRouteContextValue = {
   deleteDocument: (documentId: string) => Promise<void>;
   generateDocument: () => Promise<void>;
   restoreDocumentVersion: (versionId: string) => Promise<void>;
-  saveContentText: (contentText: string) => Promise<boolean>;
+  saveDocumentJson: (documentJson: string) => Promise<boolean>;
   updateDraft: (patch: Partial<Omit<DocumentDraft, "documentId">>) => void;
   openDocumentRoute: (document: DocumentRow) => void;
   goToDocuments: () => void;

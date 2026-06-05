@@ -2,6 +2,7 @@ import {
   areDocumentThemesEqual,
   contentBlocksToText,
   editableTextToContentBlocks,
+  getPagePreset,
   normalizeDocumentContentBlocks,
   normalizeDocumentTheme,
   type DocumentContentBlock,
@@ -23,21 +24,47 @@ export type SavePatch = Pick<
 
 type DraftState = {
   title: string;
-  contentText: string;
+  contentBlocks: DocumentContentBlock[];
   pagePreset: PagePreset;
   customWidth: number;
   customHeight: number;
   theme: DocumentTheme;
 };
 
-export function getEditableContentText(
+type EditableDocumentState = DraftState;
+
+export function getEditableContentBlocks(
   document: Pick<DocumentRow, "formatted_content" | "content_blocks">,
 ) {
-  const blockText = contentBlocksToText(
-    normalizeDocumentContentBlocks(document.content_blocks),
+  const contentBlocks = normalizeDocumentContentBlocks(
+    document.content_blocks,
   );
 
-  return blockText.trim() ? blockText : document.formatted_content;
+  return contentBlocks.length
+    ? contentBlocks
+    : editableTextToContentBlocks(document.formatted_content);
+}
+
+export function createEditableDocumentJson({
+  title,
+  contentBlocks,
+  pagePreset,
+  customWidth,
+  customHeight,
+  theme,
+}: EditableDocumentState) {
+  return JSON.stringify(
+    {
+      title: title.trim() || "Untitled",
+      page_preset: pagePreset,
+      custom_width: pagePreset === "custom" ? customWidth : null,
+      custom_height: pagePreset === "custom" ? customHeight : null,
+      theme: normalizeDocumentTheme(theme),
+      content_blocks: normalizeDocumentContentBlocks(contentBlocks),
+    },
+    null,
+    2,
+  );
 }
 
 const SLUG_UNSAFE_CHARACTERS = /[^a-z0-9]+/g;
@@ -45,24 +72,88 @@ const SLUG_EDGE_DASHES = /(^-|-$)/g;
 
 export function createSavePatch({
   title,
-  contentText,
+  contentBlocks,
   pagePreset,
   customWidth,
   customHeight,
   theme,
 }: DraftState): SavePatch {
-  const contentBlocks: DocumentContentBlock[] =
-    editableTextToContentBlocks(contentText);
+  const normalizedContentBlocks =
+    normalizeDocumentContentBlocks(contentBlocks);
 
   return {
     title: title.trim() || "Untitled",
-    formatted_content: contentBlocksToText(contentBlocks),
-    content_blocks: contentBlocks,
+    formatted_content: contentBlocksToText(normalizedContentBlocks),
+    content_blocks: normalizedContentBlocks,
     page_preset: pagePreset,
     custom_width: pagePreset === "custom" ? customWidth : null,
     custom_height: pagePreset === "custom" ? customHeight : null,
     theme: normalizeDocumentTheme(theme),
   };
+}
+
+export function createSavePatchFromDocumentJson(
+  value: string,
+  fallback: EditableDocumentState,
+): SavePatch {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(
+      error instanceof SyntaxError
+        ? `Document JSON is invalid: ${error.message}`
+        : "Document JSON is invalid.",
+      { cause: error },
+    );
+  }
+
+  if (Array.isArray(parsed)) {
+    return createSavePatch({
+      ...fallback,
+      contentBlocks: normalizeDocumentContentBlocks(parsed),
+    });
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error("Document JSON must be an object or content block array.");
+  }
+
+  const pagePreset =
+    typeof parsed.page_preset === "string"
+      ? getPagePreset(parsed.page_preset).value
+      : fallback.pagePreset;
+  const customWidth = normalizePositiveNumber(
+    parsed.custom_width,
+    fallback.customWidth,
+  );
+  const customHeight = normalizePositiveNumber(
+    parsed.custom_height,
+    fallback.customHeight,
+  );
+
+  return createSavePatch({
+    title: typeof parsed.title === "string" ? parsed.title : fallback.title,
+    contentBlocks:
+      "content_blocks" in parsed
+        ? normalizeDocumentContentBlocks(parsed.content_blocks)
+        : fallback.contentBlocks,
+    pagePreset,
+    customWidth,
+    customHeight,
+    theme: normalizeDocumentTheme(parsed.theme ?? fallback.theme),
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizePositiveNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
 }
 
 export function hasSavePatchChanged(current: SavePatch, next: SavePatch) {

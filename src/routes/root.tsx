@@ -15,8 +15,9 @@ import { toast } from "sonner";
 import { LoginForm } from "@/components/login-form";
 import { PdfDocument } from "@/components/pdf-document";
 import {
+  createSavePatchFromDocumentJson,
   createSavePatch,
-  getEditableContentText,
+  getEditableContentBlocks,
   hasSavePatchChanged,
   sortDocuments,
   type SavePatch,
@@ -127,11 +128,15 @@ export function RootRoute() {
   const title = selectedDocumentDraft
     ? selectedDocumentDraft.title
     : (selectedDocument?.title ?? "Untitled");
-  const contentText = selectedDocumentDraft
-    ? selectedDocumentDraft.contentText
-    : selectedDocument
-      ? getEditableContentText(selectedDocument)
-      : "";
+  const contentBlocks = useMemo(
+    () =>
+      selectedDocumentDraft
+        ? selectedDocumentDraft.contentBlocks
+        : selectedDocument
+          ? getEditableContentBlocks(selectedDocument)
+          : [],
+    [selectedDocument, selectedDocumentDraft],
+  );
   const pagePreset = selectedDocumentDraft
     ? selectedDocumentDraft.pagePreset
     : (selectedDocument?.page_preset ?? "a4");
@@ -174,23 +179,20 @@ export function RootRoute() {
     () =>
       createSavePatch({
         title,
-        contentText,
+        contentBlocks,
         pagePreset,
         customWidth,
         customHeight,
         theme,
       }),
-    [contentText, customHeight, customWidth, pagePreset, theme, title],
+    [contentBlocks, customHeight, customWidth, pagePreset, theme, title],
   );
 
   const selectedDocumentFormattedContent = selectedDocument?.formatted_content;
   const selectedDocumentContentBlocks = selectedDocument?.content_blocks;
   const draftContentBlocks = useMemo(
-    () =>
-      selectedDocumentDraft
-        ? normalizeDocumentContentBlocks(draftPatch.content_blocks)
-        : null,
-    [draftPatch.content_blocks, selectedDocumentDraft],
+    () => normalizeDocumentContentBlocks(draftPatch.content_blocks),
+    [draftPatch.content_blocks],
   );
 
   const pdfPreviewDocument = useMemo<PdfPreviewDocument | null>(() => {
@@ -203,9 +205,9 @@ export function RootRoute() {
       formatted_content: selectedDocumentDraft
         ? draftPatch.formatted_content
         : (selectedDocumentFormattedContent ?? ""),
-      content_blocks:
-        draftContentBlocks ??
-        normalizeDocumentContentBlocks(selectedDocumentContentBlocks),
+      content_blocks: selectedDocumentDraft
+        ? draftContentBlocks
+        : normalizeDocumentContentBlocks(selectedDocumentContentBlocks),
       page_preset: pagePreset,
       custom_width: pagePreset === "custom" ? customWidth : null,
       custom_height: pagePreset === "custom" ? customHeight : null,
@@ -251,9 +253,9 @@ export function RootRoute() {
 
     return createSavePatch({
       title: savedDocumentTitle,
-      contentText: selectedDocument
-        ? getEditableContentText(selectedDocument)
-        : "",
+      contentBlocks: selectedDocument
+        ? getEditableContentBlocks(selectedDocument)
+        : [],
       pagePreset: savedDocumentPagePreset,
       customWidth: savedDocumentCustomWidth ?? 595,
       customHeight: savedDocumentCustomHeight ?? 842,
@@ -557,19 +559,26 @@ export function RootRoute() {
     }
   }
 
-  async function saveContentText(nextContentText: string) {
+  async function saveDocumentJson(nextDocumentJson: string) {
     if (!selectedDocument) {
       return false;
     }
 
-    const patch = createSavePatch({
-      title,
-      contentText: nextContentText,
-      pagePreset,
-      customWidth,
-      customHeight,
-      theme,
-    });
+    let patch: SavePatch;
+
+    try {
+      patch = createSavePatchFromDocumentJson(nextDocumentJson, {
+        title,
+        contentBlocks,
+        pagePreset,
+        customWidth,
+        customHeight,
+        theme,
+      });
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+      return false;
+    }
 
     const updatedDocument = await saveDocument(selectedDocument.id, patch, {
       quiet: true,
@@ -595,7 +604,7 @@ export function RootRoute() {
           : {
               documentId: selectedDocument.id,
               title: selectedDocument.title,
-              contentText: getEditableContentText(selectedDocument),
+              contentBlocks: getEditableContentBlocks(selectedDocument),
               pagePreset: selectedDocument.page_preset,
               customWidth: selectedDocument.custom_width ?? 595,
               customHeight: selectedDocument.custom_height ?? 842,
@@ -704,7 +713,7 @@ export function RootRoute() {
         isLoadingVersions: documentVersionsQuery.isPending,
         isRestoringVersion,
         title,
-        contentText,
+        contentBlocks,
         pagePreset,
         customWidth,
         customHeight,
@@ -726,7 +735,7 @@ export function RootRoute() {
         deleteDocument,
         generateDocument,
         restoreDocumentVersion,
-        saveContentText,
+        saveDocumentJson,
         updateDraft,
         openDocumentRoute,
         goToDocuments,

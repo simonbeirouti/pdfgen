@@ -9,7 +9,6 @@ import {
 } from "@react-pdf/renderer";
 import type { ComponentProps, ReactNode } from "react";
 import {
-  contentBlocksToText,
   editableTextToContentBlocks,
   getPageSize,
   normalizeDocumentContentBlocks,
@@ -157,6 +156,28 @@ function hasStructuredBlocks(blocks: DocumentContentBlock[]) {
   );
 }
 
+function hasRenderableContent(blocks: DocumentContentBlock[]) {
+  return blocks.some((block) => block.type !== "slide_break");
+}
+
+function splitBlocksIntoPages(blocks: DocumentContentBlock[]) {
+  const pages: DocumentContentBlock[][] = [[]];
+
+  for (const block of blocks) {
+    if (block.type === "slide_break") {
+      if (pages.at(-1)?.length) {
+        pages.push([]);
+      }
+
+      continue;
+    }
+
+    pages[pages.length - 1]?.push(block);
+  }
+
+  return pages.filter(hasRenderableContent);
+}
+
 export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
   const pageSize = getPageSize(document);
   const theme = normalizeDocumentTheme(document.theme);
@@ -167,8 +188,21 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
   const fallbackBlocks = editableTextToContentBlocks(document.formatted_content);
   const blocks = generatedBlocks.length ? generatedBlocks : fallbackBlocks;
   const isStructured = hasStructuredBlocks(blocks);
-  const hasGeneratedContent = Boolean(contentBlocksToText(blocks).trim());
-  const pagePadding = isStructured && theme.margin === 42 ? 34 : theme.margin;
+  const isPowerPointPage =
+    document.page_preset === "powerpoint-16-9" ||
+    document.page_preset === "powerpoint-4-3";
+  const slidePages = isPowerPointPage
+    ? splitBlocksIntoPages(blocks)
+    : [blocks.filter((block) => block.type !== "slide_break")];
+  const hasGeneratedContent = slidePages.some(hasRenderableContent);
+  const renderFontScale = isPowerPointPage
+    ? Math.min(theme.fontScale, 0.92)
+    : theme.fontScale;
+  const pagePadding = isPowerPointPage
+    ? 28
+    : isStructured && theme.margin === 42
+      ? 34
+      : theme.margin;
   const styles = StyleSheet.create({
     page: {
       backgroundColor: isStructured
@@ -184,49 +218,53 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
     },
     h1: {
       color: presetStyles.textColor,
-      fontSize: theme.text.h1.fontSize * theme.fontScale,
+      fontSize: isPowerPointPage
+        ? 22
+        : theme.text.h1.fontSize * renderFontScale,
       fontWeight: 700,
       lineHeight: theme.text.h1.lineHeight,
-      marginBottom: theme.text.h1.spacingAfter,
+      marginBottom: isPowerPointPage ? 10 : theme.text.h1.spacingAfter,
     },
     title: {
       color: "#111827",
-      fontSize: 24 * theme.fontScale,
+      fontSize: isPowerPointPage ? 22 : 24 * renderFontScale,
       fontWeight: 700,
       lineHeight: 1.12,
       marginBottom: 7,
     },
     contact: {
       color: "#111827",
-      fontSize: 10.5 * theme.fontScale,
+      fontSize: isPowerPointPage ? 8.8 : 10.5 * renderFontScale,
       lineHeight: 1.28,
       marginBottom: 9,
     },
     section: {
       borderBottomColor: "#d9dee7",
       borderBottomWidth: 1,
-      marginBottom: 10,
-      marginTop: 16,
-      paddingBottom: 6,
+      marginBottom: isPowerPointPage ? 4 : 10,
+      marginTop: isPowerPointPage ? 8 : 16,
+      paddingBottom: isPowerPointPage ? 3 : 6,
     },
     sectionHeading: {
       color: "#111827",
-      fontSize: 11.5 * theme.fontScale,
+      fontSize: isPowerPointPage ? 8.8 : 11.5 * renderFontScale,
       fontWeight: 700,
       letterSpacing: 1.1,
       lineHeight: 1.15,
     },
     paragraph: {
       color: presetStyles.textColor,
-      fontSize: theme.text.p.fontSize * theme.fontScale,
-      lineHeight: theme.text.p.lineHeight,
-      marginBottom: theme.text.p.spacingAfter,
+      fontSize: isPowerPointPage
+        ? 8.7
+        : theme.text.p.fontSize * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.24 : theme.text.p.lineHeight,
+      marginBottom: isPowerPointPage ? 4 : theme.text.p.spacingAfter,
     },
     structuredParagraph: {
       color: "#1f2937",
-      fontSize: 10.5 * theme.fontScale,
-      lineHeight: 1.35,
-      marginBottom: 8,
+      fontSize: isPowerPointPage ? 8.6 : 10.5 * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.24 : 1.35,
+      marginBottom: isPowerPointPage ? 4 : 8,
     },
     item: {
       marginBottom: 5,
@@ -265,14 +303,14 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
     list: {
       display: "flex",
       flexDirection: "column",
-      gap: presetStyles.bulletGap,
-      marginBottom: theme.text.p.spacingAfter,
+      gap: isPowerPointPage ? 2.5 : presetStyles.bulletGap,
+      marginBottom: isPowerPointPage ? 4 : theme.text.p.spacingAfter,
     },
     structuredList: {
       display: "flex",
       flexDirection: "column",
       gap: 2.5,
-      marginBottom: 12,
+      marginBottom: isPowerPointPage ? 5 : 12,
     },
     listItem: {
       display: "flex",
@@ -281,27 +319,31 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
     },
     bullet: {
       color: theme.accentColor,
-      fontSize: theme.text.li.fontSize * theme.fontScale,
-      lineHeight: theme.text.li.lineHeight,
+      fontSize: isPowerPointPage
+        ? 8.7
+        : theme.text.li.fontSize * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.22 : theme.text.li.lineHeight,
       width: 10,
     },
     structuredBullet: {
       color: "#111827",
-      fontSize: 8.5 * theme.fontScale,
-      lineHeight: 1.34,
+      fontSize: isPowerPointPage ? 8.2 : 8.5 * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.22 : 1.34,
       width: 9,
     },
     listText: {
       color: presetStyles.textColor,
       flex: 1,
-      fontSize: theme.text.li.fontSize * theme.fontScale,
-      lineHeight: theme.text.li.lineHeight,
+      fontSize: isPowerPointPage
+        ? 8.7
+        : theme.text.li.fontSize * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.22 : theme.text.li.lineHeight,
     },
     structuredListText: {
       color: "#111827",
       flex: 1,
-      fontSize: 10.2 * theme.fontScale,
-      lineHeight: 1.34,
+      fontSize: isPowerPointPage ? 8.4 : 10.2 * renderFontScale,
+      lineHeight: isPowerPointPage ? 1.22 : 1.34,
     },
     link: {
       color: theme.accentColor,
@@ -325,6 +367,13 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
       maxHeight: IMAGE_MAX_HEIGHTS[theme.imageSize],
       objectFit: "contain",
       width: "100%",
+    },
+    slideFooter: {
+      bottom: 12,
+      color: "#64748b",
+      fontSize: 7,
+      position: "absolute",
+      right: pagePadding,
     },
   });
   const linkedText = (text: string, key: string, structured = isStructured) =>
@@ -468,39 +517,63 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
       );
     }
 
+    if (block.type === "slide_break") {
+      return null;
+    }
+
     return renderList(block.items, `${key}-legacy-list`, false);
   };
 
+  const renderPageBody = (
+    pageBlocks: DocumentContentBlock[],
+    pageIndex: number,
+  ) => (
+    <>
+      <View style={styles.body}>
+        {pageBlocks.map((block, index) => (
+          <View key={`${block.type}-${index}`}>
+            {renderBlock(block, `page-${pageIndex}-block-${index}`)}
+          </View>
+        ))}
+      </View>
+      {pageIndex === 0
+        ? imageAssets?.map((asset) =>
+            asset.signed_url ? (
+              <Image
+                key={asset.id}
+                src={asset.signed_url}
+                style={styles.image}
+              />
+            ) : null,
+          )
+        : null}
+      {isPowerPointPage && slidePages.length > 1 ? (
+        <Text style={styles.slideFooter}>Slide {pageIndex + 1}</Text>
+      ) : null}
+    </>
+  );
+
   return (
     <Document title={document.title || "Untitled"}>
-      <Page size={[pageSize.width, pageSize.height]} style={styles.page}>
-        {hasGeneratedContent ? (
-          <>
-            <View style={styles.body}>
-              {blocks.map((block, index) => (
-                <View key={`${block.type}-${index}`}>
-                  {renderBlock(block, `block-${index}`)}
-                </View>
-              ))}
-            </View>
-            {imageAssets?.map((asset) =>
-              asset.signed_url ? (
-                <Image
-                  key={asset.id}
-                  src={asset.signed_url}
-                  style={styles.image}
-                />
-              ) : null,
-            )}
-          </>
-        ) : (
+      {hasGeneratedContent ? (
+        slidePages.map((pageBlocks, pageIndex) => (
+          <Page
+            key={`page-${pageIndex}`}
+            size={[pageSize.width, pageSize.height]}
+            style={styles.page}
+          >
+            {renderPageBody(pageBlocks, pageIndex)}
+          </Page>
+        ))
+      ) : (
+        <Page size={[pageSize.width, pageSize.height]} style={styles.page}>
           <View style={styles.placeholder}>
             <Text style={[styles.paragraph, styles.muted]}>
               Generate content to preview the PDF.
             </Text>
           </View>
-        )}
-      </Page>
+        </Page>
+      )}
     </Document>
   );
 }
