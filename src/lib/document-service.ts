@@ -10,6 +10,7 @@ import {
   isImageAsset,
   normalizeDocumentContentBlocks,
   type AssetRow,
+  type DocumentContentBlock,
   type DocumentMessageRow,
   type DocumentRow,
   type DocumentVersionRow,
@@ -17,6 +18,8 @@ import {
   type OpenAIModel,
 } from "@/lib/documents";
 import { supabase } from "@/lib/supabase";
+
+const SIGNED_ASSET_URL_EXPIRES_IN_SECONDS = 60 * 60;
 
 export type DocumentContext = {
   assets: AssetRow[];
@@ -278,7 +281,10 @@ export async function createSignedImageUrls(
 
       const { data, error } = await supabase.storage
         .from(asset.bucket_id)
-        .createSignedUrl(asset.storage_path, 60 * 60);
+        .createSignedUrl(
+          asset.storage_path,
+          SIGNED_ASSET_URL_EXPIRES_IN_SECONDS,
+        );
 
       if (error) {
         throw error;
@@ -292,14 +298,98 @@ export async function createSignedImageUrls(
   );
 }
 
-export async function uploadAndLinkAssets({
+type SupabaseStorageSource = {
+  bucketId: string;
+  storagePath: string;
+};
+
+function getSupabaseStorageSource(src: string): SupabaseStorageSource | null {
+  if (src.startsWith("supabase://")) {
+    try {
+      const url = new URL(src);
+      const storagePath = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+
+      if (url.hostname && storagePath) {
+        return {
+          bucketId: url.hostname,
+          storagePath,
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const url = new URL(src);
+    const match = url.pathname.match(
+      /^\/storage\/v1\/object\/(?:authenticated|public|sign)\/([^/]+)\/(.+)$/,
+    );
+
+    if (!match?.[1] || !match[2]) {
+      return null;
+    }
+
+    return {
+      bucketId: decodeURIComponent(match[1]),
+      storagePath: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function createSignedImageUrl(src: string) {
+  const storageSource = getSupabaseStorageSource(src);
+
+  if (!storageSource) {
+    return src;
+  }
+
+  const { data, error } = await supabase.storage
+    .from(storageSource.bucketId)
+    .createSignedUrl(
+      storageSource.storagePath,
+      SIGNED_ASSET_URL_EXPIRES_IN_SECONDS,
+    );
+
+  if (error) {
+    throw error;
+  }
+
+  return data.signedUrl;
+}
+
+export async function resolvePdfImageSources(
+  blocks: DocumentContentBlock[],
+): Promise<DocumentContentBlock[]> {
+  return Promise.all(
+    blocks.map(async (block): Promise<DocumentContentBlock> => {
+      if (block.type === "section") {
+        return {
+          ...block,
+          children: await resolvePdfImageSources(block.children),
+        };
+      }
+
+      if (block.type === "image") {
+        return {
+          ...block,
+          src: await createSignedImageUrl(block.src),
+        };
+      }
+
+      return block;
+    }),
+  );
+}
+
+export async function uploadAssets({
   files,
   userId,
-  documentId,
 }: {
   files: File[];
   userId: string;
-  documentId: string;
 }): Promise<UploadAssetsResult> {
   const uploaded: AssetRow[] = [];
   const unsupportedFileNames: string[] = [];
@@ -343,16 +433,6 @@ export async function uploadAndLinkAssets({
     }
 
     const createdAsset = asset as AssetRow;
-    const { error: linkError } = await supabase.from("document_assets").insert({
-      document_id: documentId,
-      asset_id: createdAsset.id,
-      user_id: userId,
-    });
-
-    if (linkError) {
-      throw linkError;
-    }
-
     uploaded.push(createdAsset);
   }
 

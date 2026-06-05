@@ -241,6 +241,20 @@ export type DocumentContentBlock =
       items: string[];
     }
   | {
+      type: "image";
+      src: string;
+      caption: string;
+    }
+  | {
+      type: "table";
+      title: string;
+      columns: string[];
+      rows: Array<Array<string | number>>;
+    }
+  | {
+      type: "page_break";
+    }
+  | {
       type: "slide_break";
     };
 
@@ -440,14 +454,22 @@ export function normalizeDocumentContentBlocks(
       return [];
     }
 
+    const normalizedBlocks: DocumentContentBlock[] = [];
+
+    if (block.new_page === true) {
+      normalizedBlocks.push({ type: "page_break" });
+    }
+
     if (
       block.type === "document_title" ||
       block.type === "contact" ||
       block.type === "summary"
     ) {
-      return typeof block.text === "string" && block.text.trim()
-        ? [{ type: block.type, text: block.text.trim() }]
-        : [];
+      if (typeof block.text === "string" && block.text.trim()) {
+        normalizedBlocks.push({ type: block.type, text: block.text.trim() });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "section") {
@@ -458,72 +480,121 @@ export function normalizeDocumentContentBlocks(
           ? normalizeEducationSectionChildren(children)
           : children;
 
-      return title
-        ? [{ type: "section", title, children: normalizedChildren }]
-        : [];
+      if (title) {
+        normalizedBlocks.push({
+          type: "section",
+          title,
+          children: normalizedChildren,
+        });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "experience_item") {
       const bullets = normalizeStringArray(block.bullets);
 
-      return typeof block.role === "string" && block.role.trim()
-        ? [
-            {
-              type: "experience_item",
-              role: block.role.trim(),
-              company:
-                typeof block.company === "string" ? block.company.trim() : "",
-              location:
-                typeof block.location === "string"
-                  ? block.location.trim()
-                  : "",
-              dates:
-                typeof block.dates === "string" ? block.dates.trim() : "",
-              bullets,
-            },
-          ]
-        : [];
+      if (typeof block.role === "string" && block.role.trim()) {
+        normalizedBlocks.push({
+          type: "experience_item",
+          role: block.role.trim(),
+          company:
+            typeof block.company === "string" ? block.company.trim() : "",
+          location:
+            typeof block.location === "string"
+              ? block.location.trim()
+              : "",
+          dates:
+            typeof block.dates === "string" ? block.dates.trim() : "",
+          bullets,
+        });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "education_item") {
-      return typeof block.institution === "string" && block.institution.trim()
-        ? [
-            {
-              type: "education_item",
-              institution: block.institution.trim(),
-              qualification:
-                typeof block.qualification === "string"
-                  ? block.qualification.trim()
-                  : "",
-              dates:
-                typeof block.dates === "string" ? block.dates.trim() : "",
-            },
-          ]
-        : [];
+      if (typeof block.institution === "string" && block.institution.trim()) {
+        normalizedBlocks.push({
+          type: "education_item",
+          institution: block.institution.trim(),
+          qualification:
+            typeof block.qualification === "string"
+              ? block.qualification.trim()
+              : "",
+          dates:
+            typeof block.dates === "string" ? block.dates.trim() : "",
+        });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "skills") {
       const items = normalizeStringArray(block.items);
 
-      return items.length
-        ? [
-            {
-              type: "skills",
-              items,
-              display: block.display === "bullets" ? "bullets" : "inline",
-            },
-          ]
-        : [];
+      if (items.length) {
+        normalizedBlocks.push({
+          type: "skills",
+          items,
+          display: block.display === "bullets" ? "bullets" : "inline",
+        });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "h1" || block.type === "p") {
-      return typeof block.text === "string" && block.text.trim()
-        ? [{ type: block.type, text: block.text.trim() }]
-        : [];
+      if (typeof block.text === "string" && block.text.trim()) {
+        normalizedBlocks.push({ type: block.type, text: block.text.trim() });
+      }
+
+      return normalizedBlocks;
     }
 
-    if (block.type === "slide_break") {
-      return [{ type: "slide_break" }];
+    if (block.type === "page_break" || block.type === "slide_break") {
+      normalizedBlocks.push({
+        type: block.type === "slide_break" ? "slide_break" : "page_break",
+      });
+
+      return normalizedBlocks;
+    }
+
+    if (block.type === "image") {
+      const src = typeof block.src === "string" ? block.src.trim() : "";
+      const caption =
+        typeof block.caption === "string" ? block.caption.trim() : "";
+
+      if (src) {
+        normalizedBlocks.push({ type: "image", src, caption });
+      }
+
+      return normalizedBlocks;
+    }
+
+    if (block.type === "table") {
+      const title = typeof block.title === "string" ? block.title.trim() : "";
+      const columns = normalizeStringArray(block.columns);
+      const rows = Array.isArray(block.rows)
+        ? block.rows
+            .filter(Array.isArray)
+            .map((row) =>
+              row.map((cell) =>
+                typeof cell === "number" && Number.isFinite(cell)
+                  ? Number(cell.toFixed(2))
+                  : typeof cell === "string"
+                    ? cell.trim()
+                    : "",
+              ),
+            )
+            .filter((row) => row.some((cell) => String(cell).trim()))
+        : [];
+
+      if (columns.length && rows.length) {
+        normalizedBlocks.push({ type: "table", title, columns, rows });
+      }
+
+      return normalizedBlocks;
     }
 
     if (block.type === "ul" && Array.isArray(block.items)) {
@@ -532,10 +603,14 @@ export function normalizeDocumentContentBlocks(
         .map((item) => item.trim())
         .filter(Boolean);
 
-      return items.length ? [{ type: "ul", items }] : [];
+      if (items.length) {
+        normalizedBlocks.push({ type: "ul", items });
+      }
+
+      return normalizedBlocks;
     }
 
-    return [];
+    return normalizedBlocks;
   });
 }
 
@@ -603,8 +678,29 @@ export function contentBlocksToText(blocks: DocumentContentBlock[]): string {
         return block.items.map((item) => `- ${item}`).join("\n");
       }
 
-      if (block.type === "slide_break") {
+      if (block.type === "page_break" || block.type === "slide_break") {
         return "---";
+      }
+
+      if (block.type === "image") {
+        return block.caption ? `[Chart: ${block.caption}](${block.src})` : block.src;
+      }
+
+      if (block.type === "table") {
+        const header = block.columns.join(" | ");
+        const divider = block.columns.map(() => "---").join(" | ");
+        const rows = block.rows
+          .map((row) => row.map((cell) => String(cell)).join(" | "))
+          .join("\n");
+
+        return [
+          block.title ? `### ${block.title}` : "",
+          header,
+          divider,
+          rows,
+        ]
+          .filter(Boolean)
+          .join("\n");
       }
 
       if (block.type === "h1") {
@@ -1025,7 +1121,7 @@ export function editableTextToContentBlocks(
     const line = lines[index] ?? "";
 
     if (isSlideBreakLine(line)) {
-      blocks.push({ type: "slide_break" });
+      blocks.push({ type: "page_break" });
       index += 1;
       continue;
     }

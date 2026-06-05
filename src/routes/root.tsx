@@ -29,15 +29,15 @@ import {
   listDocuments,
   listDocumentVersions,
   loadDocumentContext,
+  resolvePdfImageSources,
   restoreDocumentVersion as restoreDocumentVersionRecord,
   saveDocument as saveDocumentRecord,
   setDocumentAssetLink,
-  uploadAndLinkAssets,
+  uploadAssets,
   type DocumentContext,
 } from "@/lib/document-service";
 import {
   DEFAULT_MODEL,
-  isImageAsset,
   normalizeDocumentContentBlocks,
   normalizeDocumentTheme,
   type AssetRow,
@@ -170,11 +170,6 @@ export function RootRoute() {
       ? documentVersionsQuery.data
       : EMPTY_DOCUMENT_VERSIONS;
 
-  const pdfImageAssets = useMemo(
-    () => linkedAssets.filter(isImageAsset),
-    [linkedAssets],
-  );
-
   const draftPatch = useMemo(
     () =>
       createSavePatch({
@@ -226,15 +221,46 @@ export function RootRoute() {
     theme,
   ]);
 
-  const pdfDocument = useMemo<ReactElement<DocumentProps> | null>(() => {
+  const pdfPreviewContentBlocksKey = useMemo(
+    () =>
+      pdfPreviewDocument
+        ? JSON.stringify(pdfPreviewDocument.content_blocks)
+        : "none",
+    [pdfPreviewDocument],
+  );
+
+  const resolvedPdfImageSourcesQuery = useQuery({
+    queryKey: documentQueryKeys.pdfImageSources(
+      selectedDocumentId ?? "none",
+      pdfPreviewContentBlocksKey,
+    ),
+    queryFn: () => resolvePdfImageSources(pdfPreviewDocument!.content_blocks),
+    enabled: Boolean(pdfPreviewDocument),
+    staleTime: 50 * 60 * 1000,
+    refetchInterval: 50 * 60 * 1000,
+  });
+
+  const resolvedPdfPreviewDocument = useMemo<PdfPreviewDocument | null>(() => {
     if (!pdfPreviewDocument) {
       return null;
     }
 
+    return {
+      ...pdfPreviewDocument,
+      content_blocks:
+        resolvedPdfImageSourcesQuery.data ?? pdfPreviewDocument.content_blocks,
+    };
+  }, [pdfPreviewDocument, resolvedPdfImageSourcesQuery.data]);
+
+  const pdfDocument = useMemo<ReactElement<DocumentProps> | null>(() => {
+    if (!resolvedPdfPreviewDocument) {
+      return null;
+    }
+
     return (
-      <PdfDocument document={pdfPreviewDocument} imageAssets={pdfImageAssets} />
+      <PdfDocument document={resolvedPdfPreviewDocument} />
     ) as ReactElement<DocumentProps>;
-  }, [pdfImageAssets, pdfPreviewDocument]);
+  }, [resolvedPdfPreviewDocument]);
 
   const savedDocumentTitle = selectedDocument?.title;
   const savedDocumentPagePreset = selectedDocument?.page_preset;
@@ -329,6 +355,12 @@ export function RootRoute() {
       toast.error(getErrorMessage(documentVersionsQuery.error));
     }
   }, [documentVersionsQuery.error]);
+
+  useEffect(() => {
+    if (resolvedPdfImageSourcesQuery.error) {
+      toast.error(getErrorMessage(resolvedPdfImageSourcesQuery.error));
+    }
+  }, [resolvedPdfImageSourcesQuery.error]);
 
   useEffect(() => {
     let isMounted = true;
@@ -630,10 +662,9 @@ export function RootRoute() {
 
     setIsUploading(true);
     try {
-      const result = await uploadAndLinkAssets({
+      const result = await uploadAssets({
         files: fileList,
         userId: session.user.id,
-        documentId: selectedDocumentId,
       });
 
       for (const fileName of result.unsupportedFileNames) {
@@ -641,6 +672,16 @@ export function RootRoute() {
       }
 
       if (result.uploaded.length) {
+        await Promise.all(
+          result.uploaded.map((asset) =>
+            setDocumentAssetLink({
+              documentId: selectedDocumentId,
+              assetId: asset.id,
+              userId: session.user.id,
+              isLinked: false,
+            }),
+          ),
+        );
         toast.success(
           `${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"} uploaded.`,
         );
@@ -655,7 +696,7 @@ export function RootRoute() {
     }
   }
 
-  async function toggleAssetLink(asset: AssetRow, isLinked: boolean) {
+  async function removeDocumentAsset(assetId: string) {
     if (!session || !selectedDocumentId) {
       return;
     }
@@ -663,13 +704,26 @@ export function RootRoute() {
     try {
       await setDocumentAssetLink({
         documentId: selectedDocumentId,
-        assetId: asset.id,
+        assetId,
         userId: session.user.id,
-        isLinked,
+        isLinked: true,
       });
+      queryClient.setQueryData<DocumentContext>(
+        documentQueryKeys.context(selectedDocumentId),
+        (currentContext) =>
+          currentContext
+            ? {
+                ...currentContext,
+                linkedAssets: currentContext.linkedAssets.filter(
+                  (asset) => asset.id !== assetId,
+                ),
+              }
+            : currentContext,
+      );
       await queryClient.invalidateQueries({
         queryKey: documentQueryKeys.context(selectedDocumentId),
       });
+      toast.success("Asset removed from PDF.");
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -733,6 +787,7 @@ export function RootRoute() {
         setIsAssetDialogOpen,
         createDocument,
         deleteDocument,
+        removeDocumentAsset,
         generateDocument,
         restoreDocumentVersion,
         saveDocumentJson,
@@ -740,7 +795,6 @@ export function RootRoute() {
         openDocumentRoute,
         goToDocuments,
         handleAssetFiles,
-        toggleAssetLink,
         signOut,
       }}
     >

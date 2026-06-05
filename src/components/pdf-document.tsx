@@ -16,7 +16,6 @@ import {
   type DocumentContentBlock,
   type DocumentRow,
   type DocumentTheme,
-  type LinkedAsset,
 } from "@/lib/documents";
 
 type PdfDocumentProps = {
@@ -30,7 +29,6 @@ type PdfDocumentProps = {
     | "custom_height"
     | "theme"
   >;
-  imageAssets?: LinkedAsset[];
 };
 
 const PRESET_RENDER_STYLES: Record<
@@ -70,7 +68,7 @@ const IMAGE_MAX_HEIGHTS: Record<DocumentTheme["imageSize"], number> = {
 };
 
 const LINK_PATTERN =
-  /\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s]+|www\.[^\s]+|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|[A-Z0-9-]+(?:\.[A-Z0-9-]+)+\/?[^\s]*)/gi;
+  /\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s]+|www\.[^\s]+|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,}\/?[^\s]*)/gi;
 const TRAILING_LINK_PUNCTUATION = /[),.;:!?]+$/;
 type PdfLinkStyle = ComponentProps<typeof Link>["style"];
 
@@ -157,19 +155,55 @@ function hasStructuredBlocks(blocks: DocumentContentBlock[]) {
 }
 
 function hasRenderableContent(blocks: DocumentContentBlock[]) {
-  return blocks.some((block) => block.type !== "slide_break");
+  return blocks.some(hasRenderableBlock);
+}
+
+function hasRenderableBlock(block: DocumentContentBlock): boolean {
+  if (isPageBreakBlock(block)) {
+    return false;
+  }
+
+  if (block.type === "section") {
+    return Boolean(block.title.trim() || hasRenderableContent(block.children));
+  }
+
+  return true;
+}
+
+function isPageBreakBlock(block: DocumentContentBlock) {
+  return block.type === "page_break" || block.type === "slide_break";
 }
 
 function splitBlocksIntoPages(blocks: DocumentContentBlock[]) {
   const pages: DocumentContentBlock[][] = [[]];
 
   for (const block of blocks) {
-    if (block.type === "slide_break") {
+    if (isPageBreakBlock(block)) {
       if (pages.at(-1)?.length) {
         pages.push([]);
       }
 
       continue;
+    }
+
+    if (block.type === "section") {
+      const childPages = splitBlocksIntoPages(block.children);
+
+      if (childPages.length > 1) {
+        childPages.forEach((children, pageIndex) => {
+          if (pageIndex > 0 && pages.at(-1)?.length) {
+            pages.push([]);
+          }
+
+          if (pageIndex === 0) {
+            pages[pages.length - 1]?.push({ ...block, children });
+          } else {
+            pages[pages.length - 1]?.push(...children);
+          }
+        });
+
+        continue;
+      }
     }
 
     pages[pages.length - 1]?.push(block);
@@ -178,7 +212,7 @@ function splitBlocksIntoPages(blocks: DocumentContentBlock[]) {
   return pages.filter(hasRenderableContent);
 }
 
-export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
+export function PdfDocument({ document }: PdfDocumentProps) {
   const pageSize = getPageSize(document);
   const theme = normalizeDocumentTheme(document.theme);
   const presetStyles = PRESET_RENDER_STYLES[theme.preset];
@@ -191,10 +225,8 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
   const isPowerPointPage =
     document.page_preset === "powerpoint-16-9" ||
     document.page_preset === "powerpoint-4-3";
-  const slidePages = isPowerPointPage
-    ? splitBlocksIntoPages(blocks)
-    : [blocks.filter((block) => block.type !== "slide_break")];
-  const hasGeneratedContent = slidePages.some(hasRenderableContent);
+  const documentPages = splitBlocksIntoPages(blocks);
+  const hasGeneratedContent = documentPages.some(hasRenderableContent);
   const renderFontScale = isPowerPointPage
     ? Math.min(theme.fontScale, 0.92)
     : theme.fontScale;
@@ -368,6 +400,62 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
       objectFit: "contain",
       width: "100%",
     },
+    blockImage: {
+      marginTop: 8,
+      maxHeight: isPowerPointPage ? 190 : 300,
+      objectFit: "contain",
+      width: "100%",
+    },
+    imageCaption: {
+      color: "#4b5563",
+      fontSize: isPowerPointPage ? 7.5 : 9 * renderFontScale,
+      lineHeight: 1.25,
+      marginBottom: isPowerPointPage ? 5 : 10,
+      marginTop: 4,
+      textAlign: "center",
+    },
+    tableWrap: {
+      borderColor: "#d7dee8",
+      borderRadius: 4,
+      borderWidth: 1,
+      marginBottom: isPowerPointPage ? 6 : 12,
+      marginTop: isPowerPointPage ? 4 : 6,
+      overflow: "hidden",
+    },
+    tableTitle: {
+      color: "#111827",
+      fontSize: isPowerPointPage ? 8.4 : 10 * renderFontScale,
+      fontWeight: 700,
+      lineHeight: 1.2,
+      marginBottom: 4,
+      marginTop: 2,
+    },
+    tableRow: {
+      display: "flex",
+      flexDirection: "row",
+    },
+    tableHeaderCell: {
+      backgroundColor: "#eef2f7",
+      borderBottomColor: "#d7dee8",
+      borderBottomWidth: 1,
+      color: "#111827",
+      flex: 1,
+      fontSize: isPowerPointPage ? 7.2 : 8.6 * renderFontScale,
+      fontWeight: 700,
+      lineHeight: 1.2,
+      paddingHorizontal: 5,
+      paddingVertical: 4,
+    },
+    tableCell: {
+      borderBottomColor: "#edf0f4",
+      borderBottomWidth: 1,
+      color: "#1f2937",
+      flex: 1,
+      fontSize: isPowerPointPage ? 7.2 : 8.5 * renderFontScale,
+      lineHeight: 1.2,
+      paddingHorizontal: 5,
+      paddingVertical: 4,
+    },
     slideFooter: {
       bottom: 12,
       color: "#64748b",
@@ -517,8 +605,62 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
       );
     }
 
-    if (block.type === "slide_break") {
+    if (isPageBreakBlock(block)) {
       return null;
+    }
+
+    if (block.type === "image") {
+      return (
+        <View>
+          <Image src={block.src} style={styles.blockImage} />
+          {block.caption ? (
+            <Text style={styles.imageCaption}>
+              {linkedText(block.caption, `${key}-caption`, true)}
+            </Text>
+          ) : null}
+        </View>
+      );
+    }
+
+    if (block.type === "table") {
+      return (
+        <View>
+          {block.title ? (
+            <Text style={styles.tableTitle}>
+              {linkedText(block.title, `${key}-title`, true)}
+            </Text>
+          ) : null}
+          <View style={styles.tableWrap}>
+            <View style={styles.tableRow}>
+              {block.columns.map((column, columnIndex) => (
+                <Text
+                  key={`${key}-header-${columnIndex}`}
+                  style={styles.tableHeaderCell}
+                >
+                  {column}
+                </Text>
+              ))}
+            </View>
+            {block.rows.map((row, rowIndex) => (
+              <View key={`${key}-row-${rowIndex}`} style={styles.tableRow}>
+                {block.columns.map((_, columnIndex) => (
+                  <Text
+                    key={`${key}-row-${rowIndex}-cell-${columnIndex}`}
+                    style={[
+                      styles.tableCell,
+                      ...(rowIndex === block.rows.length - 1
+                        ? [{ borderBottomWidth: 0 }]
+                        : []),
+                    ]}
+                  >
+                    {String(row[columnIndex] ?? "")}
+                  </Text>
+                ))}
+              </View>
+            ))}
+          </View>
+        </View>
+      );
     }
 
     return renderList(block.items, `${key}-legacy-list`, false);
@@ -536,18 +678,7 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
           </View>
         ))}
       </View>
-      {pageIndex === 0
-        ? imageAssets?.map((asset) =>
-            asset.signed_url ? (
-              <Image
-                key={asset.id}
-                src={asset.signed_url}
-                style={styles.image}
-              />
-            ) : null,
-          )
-        : null}
-      {isPowerPointPage && slidePages.length > 1 ? (
+      {isPowerPointPage && documentPages.length > 1 ? (
         <Text style={styles.slideFooter}>Slide {pageIndex + 1}</Text>
       ) : null}
     </>
@@ -556,7 +687,7 @@ export function PdfDocument({ document, imageAssets }: PdfDocumentProps) {
   return (
     <Document title={document.title || "Untitled"}>
       {hasGeneratedContent ? (
-        slidePages.map((pageBlocks, pageIndex) => (
+        documentPages.map((pageBlocks, pageIndex) => (
           <Page
             key={`page-${pageIndex}`}
             size={[pageSize.width, pageSize.height]}

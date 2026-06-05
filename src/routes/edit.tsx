@@ -21,6 +21,7 @@ import {
   Trash2Icon,
   UploadCloudIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,12 +77,25 @@ import {
   type DocumentThemeImageSize,
   type DocumentThemePreset,
   type DocumentVersionRow,
-  type LinkedAsset,
   type OpenAIModel,
   type PagePreset,
 } from "@/lib/documents";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import { useDocumentsRouteContext } from "@/routes/document-route-context";
+
+function getAssetStorageUrl(
+  asset: Pick<AssetRow, "bucket_id" | "storage_path">,
+) {
+  return `supabase://${asset.bucket_id}/${asset.storage_path
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
+}
+
+async function copyAssetStorageUrl(asset: AssetRow) {
+  await navigator.clipboard.writeText(getAssetStorageUrl(asset));
+  toast.success("URL copied");
+}
 
 export function EditDocumentRoute() {
   const {
@@ -117,10 +131,10 @@ export function EditDocumentRoute() {
     updateDraft,
     saveDocumentJson,
     handleAssetFiles,
-    toggleAssetLink,
     generateDocument,
     restoreDocumentVersion,
     deleteDocument,
+    removeDocumentAsset,
   } = useDocumentsRouteContext();
   const [isThemeSheetOpen, setIsThemeSheetOpen] = useState(false);
   const [isVersionSheetOpen, setIsVersionSheetOpen] = useState(false);
@@ -139,6 +153,10 @@ export function EditDocumentRoute() {
   );
   const [contentEditorValue, setContentEditorValue] =
     useState(editableDocumentJson);
+  const linkedAssetIds = useMemo(
+    () => new Set(linkedAssets.map((asset) => asset.id)),
+    [linkedAssets],
+  );
 
   function startEditingContent() {
     setContentEditorValue(editableDocumentJson);
@@ -281,7 +299,7 @@ export function EditDocumentRoute() {
               </div>
             </div>
 
-            <div className="grid gap-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
               <div className="flex items-center justify-between gap-3">
                 <Label>Files</Label>
                 <Button
@@ -291,7 +309,7 @@ export function EditDocumentRoute() {
                   onClick={() => setIsAssetDialogOpen(true)}
                 >
                   <PaperclipIcon />
-                  Assign
+                  Assets
                 </Button>
               </div>
               <button
@@ -311,7 +329,7 @@ export function EditDocumentRoute() {
                 )}
                 <span>Drop markdown, text, docx, or image files here</span>
                 <span className="text-xs">
-                  Uploaded files are linked to this PDF automatically.
+                  Click an uploaded file to copy its JSON URL.
                 </span>
               </button>
               <input
@@ -327,42 +345,18 @@ export function EditDocumentRoute() {
                   event.currentTarget.value = "";
                 }}
               />
-              {linkedAssets.length ? (
-                <div className="grid max-h-32 gap-2 overflow-y-auto pr-1">
-                  {linkedAssets.map((asset) => (
-                    <div
-                      key={asset.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        {isImageAsset(asset) ? (
-                          <ImageIcon className="size-4 text-muted-foreground" />
-                        ) : (
-                          <FileTextIcon className="size-4 text-muted-foreground" />
-                        )}
-                        <div className="min-w-0">
-                          <p className="truncate">{asset.filename}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatFileSize(asset.size_bytes)}
-                          </p>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Unlink ${asset.filename}`}
-                        onClick={() => void toggleAssetLink(asset, true)}
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+              <AssetGrid
+                assets={linkedAssets}
+                className="min-h-0 flex-1 content-start max-h-none"
+                emptyText="No files linked to this PDF."
+                linkedAssetIds={linkedAssetIds}
+                onRemoveAsset={(assetId) => {
+                  void removeDocumentAsset(assetId);
+                }}
+              />
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-2">
+            <div className="mt-auto grid h-[min(26rem,50%)] min-h-64 flex-none grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-2">
               <Label htmlFor="chat-message">Chat</Label>
               <div className="min-h-0 space-y-2 overflow-y-auto rounded-lg border border-border bg-muted/20 p-2">
                 {messages.length ? (
@@ -395,9 +389,7 @@ export function EditDocumentRoute() {
               <Button
                 size="lg"
                 onClick={generateDocument}
-                disabled={
-                  isGenerating || (!chatMessage.trim() && !linkedAssets.length)
-                }
+                disabled={isGenerating || !chatMessage.trim()}
               >
                 {isGenerating ? (
                   <Loader2Icon className="animate-spin" />
@@ -553,10 +545,12 @@ export function EditDocumentRoute() {
       />
       <AssetDialog
         assets={allAssets}
-        linkedAssets={linkedAssets}
+        linkedAssetIds={linkedAssetIds}
         open={isAssetDialogOpen}
         onOpenChange={setIsAssetDialogOpen}
-        onToggleAsset={toggleAssetLink}
+        onRemoveAsset={(assetId) => {
+          void removeDocumentAsset(assetId);
+        }}
       />
     </main>
   );
@@ -969,74 +963,127 @@ const PdfViewerPane = memo(function PdfViewerPane({
   );
 });
 
-function AssetDialog({
+function AssetGrid({
   assets,
-  linkedAssets,
-  open,
-  onOpenChange,
-  onToggleAsset,
+  className,
+  emptyText,
+  linkedAssetIds,
+  onRemoveAsset,
 }: {
   assets: AssetRow[];
-  linkedAssets: LinkedAsset[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onToggleAsset: (asset: AssetRow, isLinked: boolean) => void | Promise<void>;
+  className?: string;
+  emptyText: string;
+  linkedAssetIds?: Set<string>;
+  onRemoveAsset?: (assetId: string) => void;
 }) {
-  const linkedAssetIds = useMemo(
-    () => new Set(linkedAssets.map((asset) => asset.id)),
-    [linkedAssets],
-  );
+  if (!assets.length) {
+    return (
+      <p className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
+        {emptyText}
+      </p>
+    );
+  }
 
   return (
+    <div
+      className={cn(
+        "grid max-h-52 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3",
+        className,
+      )}
+    >
+      {assets.map((asset) => {
+        const isLinked = linkedAssetIds?.has(asset.id) ?? false;
+
+        return (
+          <div
+            key={asset.id}
+            className="grid min-h-28 grid-rows-[1fr_auto] gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm"
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              {isImageAsset(asset) ? (
+                <ImageIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <FileTextIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0">
+                <p className="line-clamp-3 break-all font-medium leading-snug">
+                  {asset.filename}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {formatFileSize(asset.size_bytes)}
+                </p>
+              </div>
+            </div>
+
+            <div
+              className={cn(
+                "grid min-w-0 gap-2",
+                onRemoveAsset && isLinked ? "grid-cols-2" : "grid-cols-1",
+              )}
+            >
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-w-0 px-2"
+                onClick={() => {
+                  void copyAssetStorageUrl(asset).catch((error) => {
+                    toast.error(getErrorMessage(error));
+                  });
+                }}
+              >
+                <PaperclipIcon />
+                Copy URL
+              </Button>
+              {onRemoveAsset && isLinked ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="min-w-0 px-2 text-muted-foreground hover:text-destructive"
+                  onClick={() => onRemoveAsset(asset.id)}
+                >
+                  <Trash2Icon />
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AssetDialog({
+  assets,
+  linkedAssetIds,
+  open,
+  onOpenChange,
+  onRemoveAsset,
+}: {
+  assets: AssetRow[];
+  linkedAssetIds: Set<string>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRemoveAsset: (assetId: string) => void;
+}) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Assign Assets</DialogTitle>
+          <DialogTitle>Asset Library</DialogTitle>
           <DialogDescription>
-            Link uploaded files to this PDF or reuse files from other PDFs.
+            Click a file to copy its JSON URL.
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[420px] space-y-2 overflow-y-auto">
-          {assets.length ? (
-            assets.map((asset) => {
-              const isLinked = linkedAssetIds.has(asset.id);
-              return (
-                <button
-                  key={asset.id}
-                  type="button"
-                  onClick={() => void onToggleAsset(asset, isLinked)}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2 text-left text-sm transition hover:bg-muted"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    {isImageAsset(asset) ? (
-                      <ImageIcon className="size-4 text-muted-foreground" />
-                    ) : (
-                      <FileTextIcon className="size-4 text-muted-foreground" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate">{asset.filename}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatFileSize(asset.size_bytes)}
-                      </p>
-                    </div>
-                  </div>
-                  {isLinked ? (
-                    <Badge variant="secondary">
-                      <CheckIcon />
-                      Linked
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">Available</Badge>
-                  )}
-                </button>
-              );
-            })
-          ) : (
-            <p className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
-              Upload a file from the editor to start your asset library.
-            </p>
-          )}
-        </div>
+        <AssetGrid
+          assets={assets}
+          className="max-h-[420px]"
+          emptyText="Upload a file from the editor to start your asset library."
+          linkedAssetIds={linkedAssetIds}
+          onRemoveAsset={onRemoveAsset}
+        />
       </DialogContent>
     </Dialog>
   );

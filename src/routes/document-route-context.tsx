@@ -67,6 +67,7 @@ type DocumentsRouteContextValue = {
   setIsAssetDialogOpen: Dispatch<SetStateAction<boolean>>;
   createDocument: () => Promise<void>;
   deleteDocument: (documentId: string) => Promise<void>;
+  removeDocumentAsset: (assetId: string) => Promise<void>;
   generateDocument: () => Promise<void>;
   restoreDocumentVersion: (versionId: string) => Promise<void>;
   saveDocumentJson: (documentJson: string) => Promise<boolean>;
@@ -74,10 +75,6 @@ type DocumentsRouteContextValue = {
   openDocumentRoute: (document: DocumentRow) => void;
   goToDocuments: () => void;
   handleAssetFiles: (files: FileList | File[]) => Promise<void>;
-  toggleAssetLink: (
-    asset: AssetRow,
-    isLinked: boolean,
-  ) => void | Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -87,6 +84,8 @@ export const EMPTY_DOCUMENT_VERSIONS: DocumentVersionRow[] = [];
 export const documentQueryKeys = {
   list: (userId: string) => ["documents", userId] as const,
   context: (documentId: string) => ["document-context", documentId] as const,
+  pdfImageSources: (documentId: string, contentBlocksKey: string) =>
+    ["pdf-image-sources", documentId, contentBlocksKey] as const,
   versions: (documentId: string) => ["document-versions", documentId] as const,
 };
 
